@@ -1,3 +1,8 @@
+---
+gitea: none
+include_toc: true
+---
+
 # ProtoGate
 
 ProtoGate turns a LinkIt 7697 into a remotely controlled hardware interface. A host sends newline-delimited JSON commands over the board's USB-to-UART serial port or a Wi-Fi TCP connection. The firmware executes a peripheral operation and returns one JSON response line.
