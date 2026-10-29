@@ -1,22 +1,18 @@
+// LinkIt uses unified memory; its legacy pgm_read_ptr macro is incompatible
+// with ArduinoJson's flash-string helpers.
+#define ARDUINOJSON_ENABLE_PROGMEM 0
 #include <ArduinoJson.h>
 #include <SPI.h>
 #include <Wire.h>
 #include <LWiFi.h>
-#include <LWiFiServer.h>
-#include <LWiFiClient.h>
-
-#if __has_include("wifi_config.h")
 #include "wifi_config.h"
-#else
-#include "wifi_config.example.h"
-#endif
 
 static const uint32_t SERIAL_BAUD = 115200;
 static const uint16_t WIFI_PORT = 4242;
 static const size_t MAX_LINE = 768;
 static const size_t MAX_TRANSFER = 96;
-LWiFiServer wifiServer(WIFI_PORT);
-LWiFiClient wifiClient;
+WiFiServer wifiServer(WIFI_PORT);
+WiFiClient wifiClient;
 
 static void setError(JsonDocument &response, const char *message) {
   response["ok"] = false;
@@ -97,7 +93,7 @@ static void handleRequest(JsonDocument &request, JsonDocument &response) {
       setError(response, "invalid chip-select pin"); return;
     }
     if (csPin >= 0) { pinMode(csPin, OUTPUT); digitalWrite(csPin, HIGH); }
-    SPI.beginTransaction(SPISettings(clockHz, !strcmp(bitOrder, "msb") ? MSBFIRST : LSBFIRST, mode));
+    SPI.beginTransaction(SPISettings(clockHz, !strcmp(bitOrder, "msb") ? MSBFIRST : LSBFIRST, static_cast<SPIDataMode>(mode)));
     if (csPin >= 0) digitalWrite(csPin, LOW);
     JsonArray data = response["data"].to<JsonArray>();
     for (JsonVariantConst byte : bytes.as<JsonArrayConst>()) data.add(SPI.transfer(byte.as<uint8_t>()));
@@ -139,8 +135,7 @@ void setup() {
   Serial.println("{\"ok\":true,\"event\":\"ready\",\"board\":\"LinkIt 7697\"}");
 
   if (strlen(PROTOGATE_WIFI_SSID) > 0) {
-    LWiFi.begin();
-    if (LWiFi.connect((char *)PROTOGATE_WIFI_SSID, (char *)PROTOGATE_WIFI_PASSWORD) == 0) {
+    if (WiFi.begin(PROTOGATE_WIFI_SSID, PROTOGATE_WIFI_PASSWORD) == WL_CONNECTED) {
       wifiServer.begin();
       Serial.println("{\"ok\":true,\"event\":\"wifi_ready\",\"port\":4242}");
     } else {

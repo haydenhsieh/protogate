@@ -1,0 +1,78 @@
+{
+  "packages": [
+    {
+      "name": "LinkIt",
+      "maintainer": "MediaTek Labs",
+      "websiteURL": "https://github.com/MediaTek-Labs/Arduino-Add-On-for-LinkIt-SDK",
+      "email": "",
+      "help": {
+        "online": "https://docs.labs.mediatek.com/resource/mt7687-mt7697/"
+      },
+      "platforms": [
+        {
+          "name": "LinkIt 7697",
+          "architecture": "linkit_rtos",
+          "version": "0.10.21",
+          "category": "Contributed",
+          "url": "https://github.com/MediaTek-Labs/Arduino-Add-On-for-LinkIt-SDK/releases/download/v0.10.21/mediatek_linkit_7697-v0.10.21.tar.bz2",
+          "archiveFileName": "mediatek_linkit_7697-v0.10.21.tar.bz2",
+          "boards": [
+            {
+              "name": "LinkIt 7697"
+            }
+          ],
+          "toolsDependencies": [
+            {
+              "packager": "arduino",
+              "name": "arm-none-eabi-gcc",
+              "version": "4.8.3-2014q1"
+            },
+            {
+              "packager": "LinkIt",
+              "name": "flash_tool",
+              "version": "1.4.4"
+            }
+          ],
+          "checksum": "SHA-256:6544ffc4060cb1855dd47c6273fd5cf38be466732399b68252f1ab1586841ce7",
+          "size": "16969430"
+        }
+      ],
+      "tools": [
+        {
+          "name": "flash_tool",
+          "version": "1.4.4",
+          "systems": [
+            {
+              "host": "i686-mingw32",
+              "url": "https://github.com/MediaTek-Labs/Arduino-Add-On-for-LinkIt-SDK/releases/download/v0.10.21/mediatek_linkit_7697_flash_tool-1.4.4.tar.bz2",
+              "archiveFileName": "mediatek_linkit_7697_flash_tool-1.4.4.tar.bz2",
+              "checksum": "SHA-256:71163d1d6bc6f47a8b17aa8f44107892ebda15c7450f1cd5341c2fd8b8c6fe67",
+              "size": "4908623"
+            },
+            {
+              "host": "i386-apple-darwin11",
+              "url": "https://github.com/MediaTek-Labs/Arduino-Add-On-for-LinkIt-SDK/releases/download/v0.10.21/mediatek_linkit_7697_flash_tool-1.4.4.tar.bz2",
+              "archiveFileName": "mediatek_linkit_7697_flash_tool-1.4.4.tar.bz2",
+              "checksum": "SHA-256:71163d1d6bc6f47a8b17aa8f44107892ebda15c7450f1cd5341c2fd8b8c6fe67",
+              "size": "4908623"
+            },
+            {
+              "host": "i686-linux-gnu",
+              "url": "https://github.com/MediaTek-Labs/Arduino-Add-On-for-LinkIt-SDK/releases/download/v0.10.21/mediatek_linkit_7697_flash_tool-1.4.4.tar.bz2",
+              "archiveFileName": "mediatek_linkit_7697_flash_tool-1.4.4.tar.bz2",
+              "checksum": "SHA-256:71163d1d6bc6f47a8b17aa8f44107892ebda15c7450f1cd5341c2fd8b8c6fe67",
+              "size": "4908623"
+            },
+            {
+              "host": "x86_64-linux-gnu",
+              "url": "https://github.com/MediaTek-Labs/Arduino-Add-On-for-LinkIt-SDK/releases/download/v0.10.21/mediatek_linkit_7697_flash_tool-1.4.4.tar.bz2",
+              "archiveFileName": "mediatek_linkit_7697_flash_tool-1.4.4.tar.bz2",
+              "checksum": "SHA-256:71163d1d6bc6f47a8b17aa8f44107892ebda15c7450f1cd5341c2fd8b8c6fe67",
+              "size": "4908623"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -12,10 +12,41 @@ The LinkIt 7697 HDK exposes USB through an onboard CP2102N USB-to-UART bridge; t
 
 1. Open `firmware/linkit7697/linkit7697.ino` in Arduino IDE with the LinkIt 7697 board selected.
 2. Install ArduinoJson 6 from Library Manager.
-3. For Wi-Fi, copy `wifi_config.example.h` to `wifi_config.h`, set the network name and password, then flash. Keep the real credentials out of source control.
+3. Copy `wifi_config.example.h` to `wifi_config.h`. Leave the defaults for USB serial only, or set the network name and password for Wi-Fi, then flash. The local configuration is ignored by Git.
 4. Open the serial monitor at 115200 baud or connect to the board's IP address on TCP port 4242.
 
 The Wi-Fi server starts only when a non-empty SSID is configured. Serial remains available regardless.
+
+### Arduino CLI on Linux
+
+The original MediaTek package server is unavailable. The local index below
+points to the official MediaTek GitHub release archives, with SHA-256 checksums.
+Run these commands from the repository root (the upload tool requires Python 2.7,
+and includes its own Python modules):
+
+```sh
+~/bin/arduino-cli config add board_manager.additional_urls "file://$PWD/firmware/toolchain/package_linkit_archive_index.json"
+~/bin/arduino-cli core update-index
+~/bin/arduino-cli core install LinkIt:linkit_rtos@0.10.21
+~/bin/arduino-cli lib install ArduinoJson@6.21.5
+cp -n firmware/linkit7697/wifi_config.example.h firmware/linkit7697/wifi_config.h
+~/bin/arduino-cli compile --fqbn LinkIt:linkit_rtos:linkit_7697 --build-path /tmp/protogate-linkit-build firmware/linkit7697
+~/bin/arduino-cli upload --fqbn LinkIt:linkit_rtos:linkit_7697 --port /dev/ttyUSB0 --input-dir /tmp/protogate-linkit-build firmware/linkit7697
+```
+
+Install the udev rule to grant the active local user access and create the stable
+`/dev/linkit7697` device name:
+
+```sh
+sudo install -m 0644 firmware/toolchain/70-linkit7697.rules /etc/udev/rules.d/70-linkit7697.rules
+sudo udevadm control --reload-rules
+```
+
+Unplug and reconnect the board after installing the rule. It matches USB ID
+`10c4:ea60` and serial number `0001`, as reported by the connected board.
+For access outside an active local desktop session, add your user to `dialout`
+and log in again. For temporary access to the current connection, use
+`sudo setfacl -m u:"$USER":rw /dev/ttyUSB0`.
 
 ## Host client
 
