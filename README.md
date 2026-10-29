@@ -13,6 +13,33 @@ The initial firmware supports I²C and SPI. The host package provides the same A
 
 The LinkIt 7697 HDK exposes USB through an onboard CP2102N USB-to-UART bridge; this is a serial command channel, not native USB. The board includes Wi-Fi, I²C, and SPI. The firmware targets the MediaTek LinkIt 7697 Arduino add-on and uses its `LWiFi` API. Install that board package in Arduino IDE, then install ArduinoJson 6.
 
+## I/O pins and connections
+
+Pin numbers in requests use the board's **P labels**, not raw chip GPIO numbers.
+The current firmware uses the following connections:
+
+| Protocol | Signal | Board pin | Chip GPIO |
+| --- | --- | --- | --- |
+| I²C | SCL — clock | P8 | GPIO27 |
+| I²C | SDA — data | P9 | GPIO28 |
+| SPI | MOSI — board to peripheral | P11 | GPIO29 |
+| SPI | MISO — peripheral to board | P12 | GPIO30 |
+| SPI | SCK — clock | P13 | GPIO31 |
+| SPI | CS — chip select | P10 suggested | GPIO32 |
+| USB serial | USB cable | Micro-USB connector | Onboard UART bridge |
+| Wi-Fi TCP | Wireless | No external pins | Built-in antenna |
+
+These assignments follow the board package and the
+[LinkIt 7697 pinout](https://static.chipdip.ru/lib/834/DOC003834652.pdf).
+Connect peripheral GND to board GND and use **3.3 V logic**.
+
+- **I²C:** configured at 100 kHz. SDA and SCL need pull-ups to 3.3 V; check whether the peripheral already provides them.
+- **SPI:** use `"cs_pin":10` to select P10. Chip select is active-low; without `cs_pin`, firmware does not drive a chip-select pin. The installed board package (0.10.21) implements SPI in software and does not honor the requested `clock_hz` as an exact bus frequency.
+- **USB serial:** 115200 baud. The included udev rule creates `/dev/linkit7697` on Linux.
+- **Wi-Fi TCP:** port 4242. Wi-Fi stays disabled while the configured SSID is empty.
+
+UART peripherals, GPIO commands, and ADC commands are not yet exposed by ProtoGate.
+
 ## Firmware setup
 
 1. Open `firmware/linkit7697/linkit7697.ino` in Arduino IDE with the LinkIt 7697 board selected.
@@ -87,7 +114,7 @@ Supported operations:
 | `i2c.write_read` | `address`, `write`, `length` | `data` byte array |
 | `spi.transfer` | `data` byte array, optional `clock_hz`, `mode`, `bit_order`, `cs_pin` | received `data` byte array |
 
-SPI defaults to 1 MHz, mode 0, MSB first, and no chip-select pin. When `cs_pin` is supplied, firmware drives it low for the transaction and high afterward. I²C uses the board's default `Wire` pins and 100 kHz clock. Transfers are limited to 96 bytes per request in this first firmware version.
+SPI requests default to `clock_hz: 1000000`, mode 0, MSB first, and no chip-select pin. The board package's software SPI implementation does not honor `clock_hz` as an exact bus frequency. When `cs_pin` is supplied, firmware drives it low for the transaction and high afterward. I²C uses the board's default `Wire` pins and 100 kHz clock. Transfers are limited to 96 bytes per request in this first firmware version.
 
 ## Automation
 
