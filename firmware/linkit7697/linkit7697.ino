@@ -6,6 +6,7 @@
 #include <Wire.h>
 #include <LWiFi.h>
 #include "wifi_config.h"
+#include "b822.h"
 
 static const uint32_t SERIAL_BAUD = 115200;
 static const uint16_t WIFI_PORT = 4242;
@@ -39,6 +40,12 @@ static void handleRequest(JsonDocument &request, JsonDocument &response) {
     response["firmware"] = "ProtoGate 0.1.0";
     JsonArray caps = response["capabilities"].to<JsonArray>();
     caps.add("i2c"); caps.add("spi"); caps.add("serial"); caps.add("wifi-tcp");
+    caps.add("b822");
+    return;
+  }
+
+  if (!strncmp(op, "b822.", 5)) {
+    if (!b822_dispatch(op, request, response)) setError(response, "unknown b822 operation");
     return;
   }
 
@@ -109,8 +116,10 @@ static void processLine(Stream &input, Stream &output) {
   String line = input.readStringUntil('\n');
   line.trim();
   if (line.length() == 0) return;
-  StaticJsonDocument<2048> request;
-  StaticJsonDocument<3072> response;
+  // Heap-allocated so b822 raw sample dumps fit without overflowing the task
+  // stack; generous capacity for the RLE arrays.
+  DynamicJsonDocument request(4096);
+  DynamicJsonDocument response(12288);
   if (line.length() > MAX_LINE) {
     setError(response, "request too large");
     serializeJson(response, output);
@@ -132,6 +141,7 @@ void setup() {
   Wire.begin();
   Wire.setClock(100000);
   SPI.begin();
+  b822_begin();
   Serial.println("{\"ok\":true,\"event\":\"ready\",\"board\":\"LinkIt 7697\"}");
 
   if (strlen(PROTOGATE_WIFI_SSID) > 0) {

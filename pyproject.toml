@@ -13,6 +13,7 @@ serial = ["pyserial>=3.5"]
 
 [project.scripts]
 protogate = "protogate.cli:main"
+protogate-b822 = "protogate.b822_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "host"}

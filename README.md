@@ -113,8 +113,210 @@ Supported operations:
 | `i2c.read` | `address`, `length` | `data` byte array |
 | `i2c.write_read` | `address`, `write`, `length` | `data` byte array |
 | `spi.transfer` | `data` byte array, optional `clock_hz`, `mode`, `bit_order`, `cs_pin` | received `data` byte array |
+| `b822.frame` | `frame` byte array, optional `rx_phases`, `raw` | `reply` bytes, `nphases`, optional `ebits` |
+| `b822.session` | `frame12`, `frame11` byte arrays, optional `rx_phases`, `raw` | `ca`, `cb` bytes, `nphases`, optional `ebits_a`/`ebits_b` |
+| `b822.sequence` | `frames` (list of byte arrays), optional `rx_phases_list`, `raw`, `powerup_ms`, `gap_ms` | `frames[]`, each with `reply` bytes (and `ebits` with `raw`) |
+| `b822.peek` / `b822.poke` | `addr` (and `value`) as unsigned 32-bit | `addr`, `value` — bring-up aids for raw register access |
+| `b822.eint` | optional `deb`, `level`, `mux`, `widths_ns`, `lat`, `wic` | edge-latch characterisation results (bring-up aid) |
 
 SPI requests default to `clock_hz: 1000000`, mode 0, MSB first, and no chip-select pin. The board package's software SPI implementation does not honor `clock_hz` as an exact bus frequency. When `cs_pin` is supplied, firmware drives it low for the transaction and high afterward. I²C uses the board's default `Wire` pins and 100 kHz clock. Transfers are limited to 96 bytes per request in this first firmware version.
+
+## OKI MC363 / B822 CRUM bus (`b822.*`)
+
+This firmware can act as the **printer** (tier A) on the two-wire OKI MC363/B822
+printer↔cartridge CRUM authentication bus, driving a real cartridge and reading
+its responses. It emulates the printer so Ca/Cb replies can be collected for
+arbitrary Pa/Pb — a step toward emulating the cartridge.
+
+A session is: printer sends a **CMD12** frame (Pa + ctrla); the cartridge replies
+**Ca** within 43 µs; after an 18 ms gap the printer sends a **CMD11** frame
+(Pb + ctrlb) and the cartridge replies **Cb**.
+
+**Wire layer** (matches the `la_convert` `mc363_b822` decoder, the real chip
+firmware, and bench observation). The cartridge has **only two pads and no
+ground** — a **complementary pair** powered across itself: `D2 = POWER` idles HIGH
+(powers the chip), `D1 = DATA` idles LOW. The two wires swing in opposite phase;
+each symbol is one phase whose **width** codes a bit (narrow ≈ 4.7 µs = 0, wide
+≈ 14.2 µs = 1). The POWER wire is held HIGH ~21 ms before the first command. A
+frame opens with **SOF = DATA high / POWER low (~43 µs) then the reverse** (the
+power wire dips low then high). Bytes are 10-bit words (start 0, 8 data LSB-first,
+stop 1). To read a reply the printer keeps clocking the same complementary pair
+(~4.7 µs phases) and, in each phase, **releases the high wire**; the cartridge answers
+by briefly **pulling that released wire down** — a notch of roughly 0.1–0.2 µs
+(notch = 1, clean = 0). Everywhere else the printer drives **push-pull**, and it
+holds POWER high between commands so the chip stays powered for a whole session.
+The notches are far shorter than a polled GPIO read (~0.35 µs per sample on the
+AON domain), so polling would miss most of them — see **Replies** for how the board
+catches them in hardware.
+
+**Pins.** `D1 = DATA = P4` (GPIO34), `D2 = POWER = P5` (GPIO33) — both on the AON
+GPIO domain bank, so one register read (`DIN2`) samples both wires. Use **3.3 V
+logic**. There is no ground pad: board GND is not wired to the cartridge; the chip
+is powered across the two pads. `b822.config` swaps the DATA/POWER pin assignment
+at runtime if your wiring is reversed. **Do not** jumper the loopback self-test to
+P6/P7 — one is a boot-strap pin and a jumper there wedges the board into its
+bootloader.
+
+**Required: a 1 kΩ pull-up from each pad to 3.3 V** (both D1/DATA and D2/POWER).
+The firmware drives the pair push-pull, but while it releases a wire to listen,
+something must hold that wire high for the cartridge to pull down. The chip's internal
+pull-up (~47 kΩ) is too weak for that: with the external resistors removed, the
+released wire fell low within about a microsecond and the cartridge returned nothing,
+even with the internal pull-up enabled and its pull-down cleared. With 1 kΩ on both
+pads a real cartridge answers. Only 1 kΩ has been tried.
+
+| Signal | Board pin | Chip GPIO | Idle | External pull-up |
+| --- | --- | --- | --- | --- |
+| D1 DATA | P4 | GPIO34 | low | 1 kΩ to 3.3 V |
+| D2 POWER | P5 | GPIO33 | high | 1 kΩ to 3.3 V |
+
+**Frames are byte-level.** The host supplies the complete frame byte stream (the
+bytes after the SOF, e.g. `03 12 <uid8> <21-byte body>`); the firmware owns the
+precise timing, 10-bit framing, and notch decode. All Pa/ctrl→body encoding lives
+on the host. The simplest valid frames to replay are ones decoded from a real
+capture:
+
+```sh
+python -I host/tools/decode_frames.py capture.sr      # prints replayable frames
+```
+
+**Replies.** After each command the printer keeps clocking the pair for a
+command-specific time, so the receiving ops take an RX clock-phase count: `rx_phases`
+for `b822.frame`/`b822.session`, and `rx_phases_list` (one count per frame) for
+`b822.sequence`. Measured from a real printer's capture:
+
+| Command | RX phases | Reply |
+| --- | --- | --- |
+| `0D`, `0D 16 53`, `5A` | 0 | none |
+| `5D` | about 44 | a short (~40-bit) exchange |
+| `5C` read-ID, CMD12, CMD11 | about 200–220 | 18 bytes |
+
+`5D` must not be given 0. The cartridge only answers the following command if the
+printer clocks through the `5D` exchange: with 0 phases the next read-ID was answered
+0 of 8 times, with 20 or more, 8 of 8.
+
+The board decodes replies with the MT7697's hardware edge-detect unit, which records a
+notch regardless of how short it is. For each phase the sensed pad is muxed to its WIC
+function for the (released) sense window, the latch is cleared, and the pending bit is
+read at the phase end. The per-phase bits are decoded as 10-bit words, so a real
+cartridge's 18-byte read-ID reply comes back correctly with no logic analyzer.
+
+- It exists only for GPIO33/34, i.e. the default P4/P5 wiring.
+- The trigger word defaults to `0x080` (either edge, debounce off — the debounce clock
+  is ≤ 8 kHz, which would swallow the notch) and can be changed per request with
+  `eint_deb`.
+- `"raw": true` adds the per-phase notch bits as an `ebits` string (`ebits_a`/`ebits_b`
+  for a session); `protogate.b822.decode_ebits` decodes them on the host.
+- The reply starts with a `FF` preamble byte before the first real byte (`50` for
+  read-ID), and can end with a `FF 00` of trailing fill.
+
+**Frame CRC.** The trailing two bytes of every captured frame except CMD12/CMD11 are
+a CRC-16/X-25 over the preceding bytes (command byte included), low byte first;
+`protogate.b822.seal_frame` appends it, e.g. `seal_frame([0x5A, *uid])` for the `5A`
+select frame. The 31-byte CMD12/CMD11 frames do not follow it: their 21-byte body is
+authentication data and no standard CRC-16 over any range fits.
+
+**Session order.** A real printer's session, as seen in the reference capture, is:
+`0D 00 00`, `5D`, `5C` read-ID (and `5C 00 10 75` to find any further cartridges); then
+the chip is **powered off** (both pads low for about 29 ms) and powered up again for
+about 22 ms; then `0D 16 53`, `5A` + ID + CRC (each followed only by the long reply-SOF
+pulse, no clocking), CMD12, CMD11, and `03 20` + ID + one byte + CRC, whose reply is
+read as status. After the power-off the gaps between frames are about 40 ms (`0D 16 53`
+→ `5A` 39.6 ms, → CMD12 41.1 ms, → CMD11 36.8 ms, → `03 20` 36.0 ms). In the client,
+`b822_sequence(..., reset_ms=30, powerup_ms=22, gap_ms=40)` reproduces the power-off
+and the gaps.
+
+**The power-off needs a full re-wake, not just `0D 16 53`.** The first attempts at the
+session above sent `0D 16 53` as the only frame after the power-off, matching what the
+reference capture's printer sends there — and got no reply to anything after it:
+not `5A`, not CMD12/CMD11, not the `03 20` status read, even though read-ID had just
+been answered moments earlier in the same run. Isolating it (see git history on this
+file for the diagnostic steps) showed it wasn't about the auth body, the UID, or
+`reset_ms`/`powerup_ms` timing: even **read-ID** failed when sent as the first command
+after any power-off, and the exact 3-frame call that was otherwise 100% reliable
+(`0D`, `5D`, `5C` read-ID) still worked fine. The fix is to resend the **same generic
+wake** used at session start — `0D 00 00 B3 39`, `5D 00 00 50 BA` — right after the
+power-off, before `0D 16 53`. With that, CMD12, CMD11 and `03 20` are all answered.
+So the full sequence after the power-off is: `0D`, `5D` (generic wake, again), then
+`0D 16 53`, `5A`, CMD12, CMD11, `03 20`, with the ~40 ms gaps above. In the client:
+
+```python
+frames = [[0x0D,0,0,0xB3,0x39], [0x5D,0,0,0x50,0xBA],       # generic wake, again
+          [0x0D,0x16,0x53,0xEC,0x98], seal_frame([0x5A, *uid]),
+          cmd12_frame, cmd11_frame, seal_frame([0x03,0x20,*uid,0xA0])]
+r = g.b822_sequence(frames, rx_phases=[0,44,0,0,220,220,170],
+                    reset_ms=30, powerup_ms=22, gap_ms=40)
+```
+
+**CMD12/CMD11 are answered.** With the fix above, replaying the reference capture's
+bodies with this cartridge's ID spliced in gets real cartridge replies to CMD12 and
+CMD11 — reproducible across repeated runs, 80–125 of 220 notches each. CMD12's reply
+was independently confirmed on a logic analyzer: `la_convert`'s `mc363_b822` decoder
+read `7E 9F 1F 9D DC DC 5D FE 1E 9D 9C DE 7D FC BC 3E BF AE` off the wire, matching the
+board's own on-device decode byte for byte (after its leading preamble byte). CMD11's
+reply was not re-captured on the analyzer — the run that caught CMD12 ran out of its
+2M-sample buffer just before CMD11's SOF — but it comes from the identical, now-proven
+receive path. The `03 20` status reply is the same `FF 02 A0 FD 99 FF 00...` on every
+run, while CMD12's and CMD11's replies differ each time the sequence is sent: a
+deterministic status next to a varying authentication reply is what a real
+challenge-response exchange looks like. This does not mean authentication actually
+*succeeds* — the bodies are still a different cartridge's captured challenge/response,
+so the cartridge almost certainly rejects them as invalid credentials — only that the
+mechanical exchange (frame out, real cartridge-driven reply back, decoded correctly)
+is now demonstrated working, which was the open question. A valid CMD12/CMD11 body for
+*this* cartridge — from its own real printer capture or its challenge/response
+algorithm — would be needed to test actual authentication.
+
+**Known issue.** The first read after opening a fresh serial session (the board resets)
+is sometimes lost: 5 of 19 such first reads failed in testing, and raising
+`powerup_ms` from 21 to 60 did not clearly help. Reads after that were reliable (dozens
+of consecutive correct reads per setting). The cause is not yet established; cold
+instruction-cache timing on the first transmit is a suspect. Check that a read-ID reply
+contains `50` and retry once if not.
+
+**Host API and CLI.**
+
+```python
+from protogate import ProtoGate
+from protogate import b822
+
+f12 = b822.build_frame(b822.CMD12, body12)   # 03 12 <uid> <body12>
+f11 = b822.build_frame(b822.CMD11, body11)
+with ProtoGate.serial("/dev/linkit7697") as g:
+    r = g.b822_session(f12, f11, raw=True)
+    print(r["ca"], r["cb"])
+```
+
+Reading a cartridge's ID takes the two init frames and then the read-ID frame, kept
+powered together:
+
+```python
+INIT = [[0x0D, 0, 0, 0xB3, 0x39], [0x5D, 0, 0, 0x50, 0xBA], [0x5C, 0x01, 0x99, 0x64]]
+with ProtoGate.serial("/dev/linkit7697") as g:
+    r = g.b822_sequence(INIT, rx_phases=[0, 60, 220])
+    print(r["frames"][2]["reply"])    # FF 50 <8-byte UID> ...
+```
+
+`host/tools/eint_sweep.py` runs that sequence for a list of edge-unit settings and
+scores each against a known-good reply, for tuning against a new cartridge.
+
+```sh
+protogate-b822 --serial /dev/linkit7697 \
+    --frame12 "03 12 41 BE 08 12 04 0B 00 E0 <body>" \
+    --frame11 "03 11 41 BE 08 12 04 0B 00 E0 <body>" \
+    --cta "01 14 00 00" --ctb "01 14 00 00" --csv run.csv
+```
+
+`protogate-b822` prints a row in the project's 12-column capture format
+(`xp,xc,pa,ca,pb,cb,cta,ctb,pua,cua,pub,cub`); `--rx-phases` sets how many RX clock
+phases to listen for each reply.
+
+**Validation (no hardware).** The wire logic is checked against the real decoder:
+`python -I host/tests/test_b822_wire.py` synthesises the TX waveform and confirms
+`pd.py` decodes it back to the input frame (it needs `sigrok-cli` and the `mc363_b822`
+decoder). `python -I host/tests/test_b822_ebits.py` checks the host-side reply decode on
+synthetic notch bits at every alignment and on bits captured from a real cartridge; it
+needs neither.
 
 ## Automation
 

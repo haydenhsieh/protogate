@@ -1,1 +1,5 @@
 firmware/linkit7697/wifi_config.h
+host/protogate.egg-info/
+host/protogate/__pycache__/
+__pycache__/
+tmp/

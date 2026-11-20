@@ -90,7 +90,7 @@ class ProtoGate:
                              "write": list(write), "length": read_count})["data"]
 
     def spi_transfer(self, data: Iterable[int], clock_hz: int = 1_000_000,
-                     mode: int = 0, bit_order: str = "msb", 
+                     mode: int = 0, bit_order: str = "msb",
                      cs_pin: Optional[int] = None) -> Iterable[int]:
         command: Dict[str, Any] = {"op": "spi.transfer", "data": list(data),
                                    "clock_hz": clock_hz, "mode": mode,
@@ -98,3 +98,76 @@ class ProtoGate:
         if cs_pin is not None:
             command["cs_pin"] = cs_pin
         return self.request(command)["data"]
+
+    # -- OKI MC363/B822 printer-emulation bus -------------------------------
+
+    def b822_frame(self, frame: Iterable[int], rx_phases: Optional[int] = None,
+                   raw: bool = False) -> Dict[str, Any]:
+        """Send one printer frame (full byte stream after SOF) and decode the
+        cartridge's reply on the board. Returns the firmware response: ``reply``
+        (decoded bytes) and ``nphases``; with ``raw`` also ``ebits``, the per-phase notch
+        bits as a ``0``/``1`` string (decode with ``b822.decode_ebits``).
+
+        ``rx_phases`` is the number of RX clock phases to listen for; reply length is
+        command-specific (``0`` for no reply, about 220 for an 18-byte reply)."""
+        command: Dict[str, Any] = {"op": "b822.frame", "frame": list(frame)}
+        if rx_phases is not None:
+            command["rx_phases"] = rx_phases
+        if raw:
+            command["raw"] = True
+        return self.request(command)
+
+    def b822_session(self, frame12: Iterable[int], frame11: Iterable[int],
+                     rx_phases: Optional[int] = None,
+                     raw: bool = False) -> Dict[str, Any]:
+        """Run a full CMD12 -> Ca, 18 ms, CMD11 -> Cb handshake. ``frame12`` and
+        ``frame11`` are the complete byte streams (e.g. ``03 12 <uid> <body>``).
+        Returns ``ca``/``cb`` decoded bytes and ``nphases``; with ``raw`` also
+        ``ebits_a``/``ebits_b`` (see ``b822_frame``)."""
+        command: Dict[str, Any] = {"op": "b822.session",
+                                   "frame12": list(frame12),
+                                   "frame11": list(frame11)}
+        if rx_phases is not None:
+            command["rx_phases"] = rx_phases
+        if raw:
+            command["raw"] = True
+        return self.request(command)
+
+    def b822_sequence(self, frames: Iterable[Iterable[int]],
+                      rx_phases: Optional[Iterable[int]] = None,
+                      raw: bool = False,
+                      powerup_ms: Optional[int] = None,
+                      gap_ms: Optional[int] = None,
+                      reset_ms: Optional[int] = None) -> Dict[str, Any]:
+        """Send several frames back-to-back with the cartridge kept powered between
+        them (it needs the ``0D``/``5D`` init frames before a ``5C`` read-ID), and
+        decode each command's reply on the board. Returns
+        ``{"frames": [{"reply": [...], "nphases": n}, ...]}``.
+
+        ``rx_phases`` gives one RX clock-phase count per frame, because the printer keeps
+        clocking for a command-specific time (measured from a real printer): ``0`` for
+        ``0D``, ``0D 16 53`` and ``5A``; about 44 for ``5D``; about 220 for an 18-byte
+        reply (read-ID, CMD12, CMD11). ``5D`` must NOT get ``0``: the cartridge only
+        answers the next command if the printer clocks through its short exchange. ``raw=True`` also returns each frame's per-phase notch
+        bits as an ``ebits`` string of ``0``/``1`` (decode with ``b822.decode_ebits``).
+
+        ``reset_ms`` powers the chip DOWN for that long before the first frame (both pads
+        low), then ``powerup_ms`` of power before it. A real printer does this once, between
+        reading the cartridge ID and starting the authentication session (``0D 16 53``).
+        After a ``reset_ms`` power-off, the generic wake frames (``0D``, ``5D`` — the same
+        ones used at session start) must be resent before ``0D 16 53``, or nothing after
+        them gets a reply, not even read-ID. ``0D 16 53`` alone is not enough.
+        """
+        command: Dict[str, Any] = {"op": "b822.sequence",
+                                   "frames": [list(f) for f in frames]}
+        if rx_phases is not None:
+            command["rx_phases_list"] = list(rx_phases)
+        if raw:
+            command["raw"] = True
+        if powerup_ms is not None:
+            command["powerup_ms"] = powerup_ms
+        if gap_ms is not None:
+            command["gap_ms"] = gap_ms
+        if reset_ms is not None:
+            command["reset_ms"] = reset_ms
+        return self.request(command)
