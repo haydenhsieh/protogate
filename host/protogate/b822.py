@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import List, Optional, Sequence, Tuple
 
+from . import packer
+
 # UID seen in the reference captures (03_12_11分析.txt / mc363.sr frames). Each
 # physical cartridge has its OWN id, so read it with READ_ID_CMD instead of
 # assuming this one.
@@ -52,16 +54,36 @@ def build_frame(cmd: int, body: Sequence[int],
 
     ``body`` is the command-specific payload exactly as it appears on the wire
     (the 21-byte authentication body for CMD12/CMD11). This is the byte stream
-    the firmware transmits as 10-bit LSB-first words after the SOF. The simplest
-    reliable way to obtain a valid ``body`` is to replay one decoded from a real
-    capture (see ``tools/decode_frames.py``); synthesising a body from a raw Pa
-    requires the body bit-layout, which is confirmed on hardware at bring-up.
+    the firmware transmits as 10-bit LSB-first words after the SOF. To send a
+    body built from a chosen Pa/ctrl rather than one replayed from a real
+    capture, use :func:`build_auth_frame`.
     """
     uid = list(uid)
     if len(uid) != 8:
         raise ValueError("uid must be 8 bytes")
     return [HEAD & 0xFF, cmd & 0xFF, *(b & 0xFF for b in uid),
             *(b & 0xFF for b in body)]
+
+
+def build_auth_frame(cmd: int, pa: Sequence[int], ctrl: Sequence[int],
+                     uid: Sequence[int] = DEFAULT_UID,
+                     p_unk: int = 0, prt_common: int = 0) -> List[int]:
+    """Build a CMD12/CMD11 frame from a chosen logical Pa (or Pb) and ctrl,
+    bit-packing them into the 21-byte body (see ``packer.pack_body``).
+
+    ``prt_common``/``p_unk`` are the body's two free-looking fields: across
+    130 real captured CMD12/CMD11 rows (``~/workspace/protogate/tmp/
+    a112_captured_samples.txt``) both vary close to uniformly at random,
+    uncorrelated with ctrl, Pa, or CMD12-vs-CMD11, with no observed
+    constraint -- so any fixed value (the default, 0) is as good as another
+    for a frame we're constructing rather than replaying. ``pack_body`` is
+    confirmed against that same real sample file: all 130 rows round-trip
+    through it exactly (see ``host/tests/test_b822_packer.py``), though no
+    frame built this way has yet been confirmed accepted by a real cartridge.
+    """
+    body = packer.pack_body(bytes(b & 0xFF for b in pa), bytes(b & 0xFF for b in ctrl),
+                            p_unk, prt_common)
+    return build_frame(cmd, body, uid)
 
 
 # ---------------------------------------------------------------------------
