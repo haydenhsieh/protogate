@@ -172,9 +172,21 @@ pads a real cartridge answers. Only 1 kΩ has been tried.
 
 **Frames are byte-level.** The host supplies the complete frame byte stream (the
 bytes after the SOF, e.g. `03 12 <uid8> <21-byte body>`); the firmware owns the
-precise timing, 10-bit framing, and notch decode. All Pa/ctrl→body encoding lives
-on the host. The simplest valid frames to replay are ones decoded from a real
-capture:
+precise timing, 10-bit framing, and notch decode. All Pa/ctrl↔body encoding lives
+on the host, in `protogate.packer`: the 21-byte body bit-packs a 3-bit "common"
+header into every one of 16 raw bytes alongside 5 payload bits each (16×5 = 80
+bits = the 10-byte Pa), plus 4 literal ctrl bytes and 1 free byte (`p_unk`).
+`b822.build_auth_frame(cmd, pa, ctrl, uid, p_unk, prt_common)` builds a frame this
+way from a chosen Pa/ctrl (`prt_common`/`p_unk` can be any fixed value — both vary
+close to uniformly at random across real captures, uncorrelated with ctrl or Pa).
+This is confirmed against all 130 real rows of `tmp/a112_captured_samples.txt` —
+the raw capture file that feeds the separate `a112_chip` project's `packer.rb` to
+build its `captured/*.txt` dataset — which unpack and round-trip through it
+exactly (see `host/tests/test_b822_packer.py`). The reference `.sr` captures in
+this repo are a *different* exception: they replay one reused CMD12 body across
+different UIDs and don't fit this model, which per the project owner reflects a
+MC363-vs-B822 common-bits convention difference, not a flaw in it. Frames can
+still be replayed byte-for-byte from any capture instead of built:
 
 ```sh
 python -I host/tools/decode_frames.py capture.sr      # prints replayable frames
@@ -209,6 +221,11 @@ cartridge's 18-byte read-ID reply comes back correctly with no logic analyzer.
   for a session); `protogate.b822.decode_ebits` decodes them on the host.
 - The reply starts with a `FF` preamble byte before the first real byte (`50` for
   read-ID), and can end with a `FF 00` of trailing fill.
+- For CMD12/CMD11, `ca`/`cb` are still the *raw* wire-level bytes, bit-packed the
+  same way as the TX body (above) — not yet the logical 10-byte Ca/Cb. Unpack them
+  with `protogate.packer.unpack_reply`, which strips the preamble/trailing fill and
+  un-splits the common/payload bits; confirmed against a real cartridge reply (both
+  Ca and Cb decode with a uniform 3-bit common header across all 16 raw bytes).
 
 **Frame CRC.** The trailing two bytes of every captured frame except CMD12/CMD11 are
 a CRC-16/X-25 over the preceding bytes (command byte included), low byte first;
@@ -278,13 +295,18 @@ contains `50` and retry once if not.
 
 ```python
 from protogate import ProtoGate
-from protogate import b822
+from protogate import b822, packer
 
-f12 = b822.build_frame(b822.CMD12, body12)   # 03 12 <uid> <body12>
-f11 = b822.build_frame(b822.CMD11, body11)
+# Build frames from a chosen Pa/ctrl (bit-packed on the host, see above):
+f12 = b822.build_auth_frame(b822.CMD12, pa, cta, uid)
+f11 = b822.build_auth_frame(b822.CMD11, pb, ctb, uid)
+# ...or replay literal frame bytes decoded from a capture instead:
+# f12 = b822.build_frame(b822.CMD12, body12)   # 03 12 <uid> <body12>
+
 with ProtoGate.serial("/dev/linkit7697") as g:
     r = g.b822_session(f12, f11, raw=True)
-    print(r["ca"], r["cb"])
+    ca = packer.unpack_reply(r["ca"])["chp"]     # raw reply -> logical 10-byte Ca
+    cb = packer.unpack_reply(r["cb"])["chp"]
 ```
 
 Reading a cartridge's ID takes the two init frames and then the read-ID frame, kept
@@ -301,6 +323,12 @@ with ProtoGate.serial("/dev/linkit7697") as g:
 scores each against a known-good reply, for tuning against a new cartridge.
 
 ```sh
+# Build frames from a chosen Pa/ctrl (bit-packed on the host):
+protogate-b822 --serial /dev/linkit7697 --uid "41 BE 08 12 04 0B 00 E0" \
+    --pa "<10 bytes>" --cta "01 00 00 00" --pb "<10 bytes>" --ctb "01 00 00 00" \
+    --csv run.csv
+
+# ...or replay pre-built frame bytes decoded from a capture instead:
 protogate-b822 --serial /dev/linkit7697 \
     --frame12 "03 12 41 BE 08 12 04 0B 00 E0 <body>" \
     --frame11 "03 11 41 BE 08 12 04 0B 00 E0 <body>" \
@@ -308,15 +336,18 @@ protogate-b822 --serial /dev/linkit7697 \
 ```
 
 `protogate-b822` prints a row in the project's 12-column capture format
-(`xp,xc,pa,ca,pb,cb,cta,ctb,pua,cua,pub,cub`); `--rx-phases` sets how many RX clock
-phases to listen for each reply.
+(`xp,xc,pa,ca,pb,cb,cta,ctb,pua,cua,pub,cub`), unpacking the cartridge's raw Ca/Cb
+reply bytes first; `--rx-phases` sets how many RX clock phases to listen for each
+reply. `host/tools/capture_to_csv.py` batch-converts a JSONL log of sessions into
+appended rows the same way.
 
 **Validation (no hardware).** The wire logic is checked against the real decoder:
 `python -I host/tests/test_b822_wire.py` synthesises the TX waveform and confirms
 `pd.py` decodes it back to the input frame (it needs `sigrok-cli` and the `mc363_b822`
 decoder). `python -I host/tests/test_b822_ebits.py` checks the host-side reply decode on
 synthetic notch bits at every alignment and on bits captured from a real cartridge; it
-needs neither.
+needs neither. `python -I host/tests/test_b822_packer.py` checks the body/reply bit
+(un)packing against real raw CMD12/CMD11 samples; it needs neither either.
 
 ## Automation
 
